@@ -1,0 +1,71 @@
+name: Build Dosemed APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Preparar keystore fixa (secrets)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/dosemed.jks"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/dosemed.jks" >> "$GITHUB_ENV"
+
+      - name: Build APK (assinado com a keystore fixa)
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: gradle assembleDebug --stacktrace
+
+      - name: Mostrar assinatura do APK
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep -E "SHA-(1|256) digest"
+
+      - name: Verificar ícone e versão do APK (aapt)
+        run: |
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          "$AAPT" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E "^package:|application-icon|application-label:|launchable-activity|^application:"
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -E "ic_launcher|mipmap" | head -30
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk Dosemed.apk
+
+      - name: Upload APK (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dosemed-debug-apk
+          path: Dosemed.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (nova tag a cada build, marcada como latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v1.0.${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" Dosemed.apk --target "${GITHUB_SHA}" --latest \
+            --title "Dosemed $TAG" \
+            --notes "APK do Dosemed $TAG (versionCode $((100 + GITHUB_RUN_NUMBER))), assinatura fixa, gerado automaticamente pelo GitHub Actions. Link estável: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/Dosemed.apk"

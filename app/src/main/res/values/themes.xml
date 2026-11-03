@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.Dosemed" parent="android:Theme.Material.NoActionBar" />
+</resources>
